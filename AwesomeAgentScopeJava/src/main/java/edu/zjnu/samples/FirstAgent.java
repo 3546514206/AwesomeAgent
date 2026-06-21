@@ -18,7 +18,7 @@ public class FirstAgent {
 
     public static void main(String[] args) {
         OpenAIChatModel customModel = OpenAIChatModel.builder()
-                .apiKey("")
+                .apiKey(System.getProperty("openai.key"))
                 .baseUrl("https://open.bigmodel.cn/api/paas/v4/")
                 .modelName("glm-5.2")
                 .build();
