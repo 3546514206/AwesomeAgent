@@ -40,3 +40,4 @@ build/
 /.agentscope/
 /.idea/
 /.mvn/
+/artifacts/
