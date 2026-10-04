@@ -15,11 +15,13 @@ if is_empty(model) or is_empty(api_key) or is_empty(base_url):
 
 client = OpenAI()
 
-
-
 completion = client.chat.completions.create(
     model=model,
     messages=[
+        {
+            "role": "system",
+            "content": "不啰嗦！"
+        },
         {
             "role": "user",
             "content": "你是谁？"
@@ -28,4 +30,3 @@ completion = client.chat.completions.create(
 )
 
 print(completion.choices[0].message.content)
-
