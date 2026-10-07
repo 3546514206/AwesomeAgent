@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>一次 LLM 调用的剖面 · LLM 服务架构图</title>
+<style>
+  :root{
+    --paper:#ECF0F4; --ink:#1C2B3A; --muted:#5A6B7A; --hair:#C7D2DC;
+    --blue:#2D5BFF; --blue-soft:#7E9BFF;
+    --copper:#C25E00; --copper-text:#A34E0E; --copper-soft:#E09A5F;
+    --danger:#C0392B;
+    --room:#14212E; --room-ink:#D7E2EC; --room-hair:#2C3E50;
+    --sans:"PingFang SC","Microsoft YaHei","Noto Sans CJK SC","Source Han Sans SC",sans-serif;
+    --mono:"Cascadia Code","JetBrains Mono",Consolas,Menlo,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    background:var(--paper); color:var(--ink);
+    font-family:var(--sans); font-size:15px; line-height:1.8;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1040px;margin:0 auto;padding:56px 20px 72px}
+  .mono{font-family:var(--mono)}
+
+  /* ---------- 头部 ---------- */
+  .origin{
+    display:inline-flex;align-items:center;gap:10px;
+    font-family:var(--mono);font-size:13px;color:var(--ink);
+    background:#F7FAFC;border:1px solid var(--hair);border-radius:6px;
+    padding:8px 14px;margin-bottom:26px;
+  }
+  .origin .zero{
+    display:inline-flex;align-items:center;justify-content:center;
+    width:20px;height:20px;border-radius:50%;flex:none;
+    background:var(--blue);color:#fff;font-size:11px;
+  }
+  h1{font-size:clamp(30px,5vw,44px);font-weight:800;letter-spacing:.01em;line-height:1.25}
+  .sub{color:var(--muted);margin-top:10px;max-width:640px}
+  .sub code{font-family:var(--mono);font-size:13px;background:#F7FAFC;border:1px solid var(--hair);border-radius:4px;padding:1px 6px;color:var(--ink)}
+  .legend{display:flex;flex-wrap:wrap;gap:10px 28px;margin-top:26px;font-size:13px;color:var(--muted)}
+  .legend .item{display:inline-flex;align-items:center;gap:8px}
+  .legend .line{width:34px;height:0;border-top:3px solid var(--blue)}
+  .legend .line.copper{border-top-color:var(--copper)}
+  .legend .dot{width:9px;height:9px;border-radius:50%;background:var(--danger);flex:none}
+
+  /* ---------- 剖面栈 ---------- */
+  .stack{position:relative;margin-top:52px;padding:6px 72px 6px 76px}
+  .stack::before,.stack::after{
+    content:"";position:absolute;top:0;bottom:0;width:3px;border-radius:2px;
+  }
+  .stack::before{
+    left:30px;
+    background:repeating-linear-gradient(180deg,var(--blue) 0 16px,var(--blue-soft) 16px 26px);
+    animation:flow 1.4s linear infinite;
+  }
+  .stack::after{
+    right:30px;
+    background:repeating-linear-gradient(180deg,var(--copper) 0 16px,var(--copper-soft) 16px 26px);
+    animation:flow 1.4s linear infinite;
+  }
+  @keyframes flow{to{background-position:0 26px}}
+  .rail{
+    position:absolute;top:-26px;font-family:var(--mono);font-size:11px;letter-spacing:.08em;
+  }
+  .rail.down{left:20px;color:var(--blue)}
+  .rail.up{right:20px;color:var(--copper-text)}
+
+  .stratum{position:relative;border-top:1px solid var(--hair);padding:30px 0 34px}
+  .stratum:first-of-type{border-top:none}
+  .n{
+    position:absolute;left:-59px;top:32px;z-index:1;
+    width:24px;height:24px;border-radius:50%;
+    display:flex;align-items:center;justify-content:center;
+    background:var(--blue);color:#fff;
+    font-family:var(--mono);font-size:12px;font-weight:700;
+    box-shadow:0 0 0 4px var(--paper);
+  }
+  .n.copper{left:auto;right:-59px;background:var(--copper)}
+  h2{font-size:22px;font-weight:700;letter-spacing:.01em;margin-bottom:6px}
+  h2 .en{font-family:var(--mono);font-size:15px;font-weight:600;color:var(--muted)}
+  .lead{color:var(--muted);max-width:760px;margin-bottom:16px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px 36px}
+  ul.steps{list-style:none}
+  ul.steps li{padding-left:18px;position:relative;margin-bottom:6px}
+  ul.steps li::before{content:"";position:absolute;left:2px;top:12px;width:6px;height:6px;border-radius:50%;background:var(--blue)}
+
+  pre.code{
+    font-family:var(--mono);font-size:12.5px;line-height:1.7;
+    background:#F7FAFC;border:1px solid var(--hair);border-left:3px solid var(--blue);
+    border-radius:6px;padding:12px 16px;overflow-x:auto;white-space:pre;
+  }
+  pre.code.copper{border-left-color:var(--copper)}
+  pre.code.quiet{border-left-color:var(--hair)}
+  .cmt{color:var(--muted)}
+
+  table.fields{width:100%;border-collapse:collapse;font-size:13.5px;margin-top:6px}
+  table.fields th{
+    font-family:var(--mono);font-size:12px;font-weight:600;color:var(--muted);
+    text-align:left;border-bottom:2px solid var(--hair);padding:6px 10px;
+  }
+  table.fields td{border-bottom:1px solid var(--hair);padding:7px 10px;vertical-align:top}
+  table.fields td:first-child{font-family:var(--mono);font-size:12.5px;white-space:nowrap}
+
+  .note{
+    margin-top:16px;padding:10px 14px;border-left:3px solid var(--copper);
+    background:rgba(194,94,0,.06);border-radius:0 6px 6px 0;
+    font-size:13.5px;color:var(--copper-text);max-width:760px;
+  }
+  .badge-nogpu{
+    display:inline-block;font-family:var(--mono);font-size:11.5px;
+    border:1px solid var(--hair);border-radius:20px;padding:1px 10px;
+    color:var(--muted);margin-left:10px;vertical-align:2px;
+  }
+
+  /* ④ 的三个子步骤 */
+  .substeps{display:grid;grid-template-columns:1fr 1fr 1fr;gap:22px;margin-top:8px}
+  .substep h3{
+    font-size:15px;font-weight:700;margin-bottom:4px;
+    display:flex;align-items:center;gap:8px;
+  }
+  .substep .n4{
+    flex:none;width:20px;height:20px;border-radius:50%;
+    border:2px solid var(--blue);color:var(--blue);background:transparent;
+    display:inline-flex;align-items:center;justify-content:center;
+    font-family:var(--mono);font-size:10.5px;font-weight:700;
+  }
+  .substep p{font-size:13.5px;color:var(--muted);margin-bottom:8px}
+
+  /* ⑤ GPU 机房（全页唯一的深色块） */
+  .room{
+    background:var(--room);color:var(--room-ink);
+    border-radius:8px;padding:28px 32px;margin:10px 0 4px;
+  }
+  .room h2{color:#fff}
+  .room h2 .en{color:#8FA6BC}
+  .room .lead{color:#8FA6BC}
+  .room pre.code{background:#0D1822;border-color:var(--room-hair);border-left-color:var(--copper)}
+  .room pre.code .cmt{color:#5F7890}
+  .room table.fields th{color:#8FA6BC;border-bottom-color:var(--room-hair)}
+  .room table.fields td{border-bottom-color:var(--room-hair)}
+  .room .n{background:var(--copper)}
+  .room .note{background:rgba(194,94,0,.14);color:var(--copper-soft)}
+
+  /* ---------- 工具回环 ---------- */
+  .loop{position:relative;border-top:1px solid var(--hair);padding:30px 0 10px}
+  .loopgrid{display:grid;grid-template-columns:1fr 300px;gap:36px;align-items:start}
+  .ext{
+    border:2px dashed var(--copper);border-radius:8px;padding:14px 18px;
+    font-size:13.5px;color:var(--copper-text);
+  }
+  .ext .mono{font-size:12.5px}
+  .steps-copper li::before{background:var(--copper) !important}
+
+  /* ---------- 断链清单 ---------- */
+  .chain{
+    margin-top:56px;border-top:3px solid var(--ink);padding-top:26px;
+    display:grid;grid-template-columns:1fr 1.4fr;gap:36px;
+  }
+  .chain h3{font-size:20px;font-weight:800}
+  .chain .concl{color:var(--muted);margin-top:8px;max-width:380px}
+  .risks{list-style:none}
+  .risks li{display:flex;gap:12px;padding:10px 0;border-bottom:1px solid var(--hair);font-size:14px}
+  .risks .dot{flex:none;width:10px;height:10px;border-radius:50%;background:var(--danger);margin-top:9px}
+  .risks .where{font-family:var(--mono);font-size:11.5px;color:var(--muted);white-space:nowrap}
+
+  @media (prefers-reduced-motion:reduce){
+    .stack::before,.stack::after{animation:none}
+  }
+  @media (max-width:760px){
+    .wrap{padding:36px 16px 56px}
+    .stack{padding:0 0 0 8px}
+    .stack::before,.stack::after,.rail{display:none}
+    .n,.n.copper{position:static;flex:none;margin-right:10px;box-shadow:none}
+    .stratum h2{display:flex;align-items:center}
+    .grid2,.substeps,.loopgrid,.chain{grid-template-columns:1fr}
+    .substep{border-top:1px dashed var(--hair);padding-top:14px}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <p class="origin"><span class="zero">0</span>client.chat.completions.create(model=…, messages=…, tools=TOOLS)</p>
+    <h1>一次 LLM 调用的剖面</h1>
+    <p class="sub">从 <code>create_completion()</code> 里的一行 SDK 调用，到 GPU 上算出的下一个 token，再带着 <code>tool_calls</code> 绕回你的 agent——五层栈，一趟工具回环。</p>
+    <div class="legend">
+      <span class="item"><span class="line"></span>请求下行</span>
+      <span class="item"><span class="line copper"></span>响应与工具回环上行</span>
+      <span class="item"><span class="dot"></span>断链风险（文末清单）</span>
+    </div>
+  </header>
+
+  <main class="stack">
+    <span class="rail down">请求 ↓</span>
+    <span class="rail up">↑ 响应</span>
+
+    <!-- L1 -->
+    <section class="stratum">
+      <span class="n">1</span>
+      <h2>调用方 <span class="en">— SDK 与你的 agent</span></h2>
+      <p class="lead">openai SDK 只是讲普通话的 HTTP 客户端：把 Python 对象序列化成 JSON 报文 POST 出去，流式时读 SSE。<code class="mono">call_llm.py</code> 读环境变量、建 client，<code class="mono">test_003.py</code> 在这一层跑 agent 循环。</p>
+      <div class="grid2">
+        <ul class="steps">
+          <li><b>test_003.py 四步</b>：上送工具清单 → 模型决策 → 执行工具 → 结果回传组织回答</li>
+          <li><b>call_llm.py</b>：<code class="mono">create_completion()</code> 返回原始 completion（<code class="mono">tool_calls</code> 从这里取）；<code class="mono">chat()</code> 只取文本</li>
+          <li>环境变量：<code class="mono">LLM_API_BASE_URL_SIMPLE / LLM_API_KEY / LLM_MODEL</code> 决定请求发往哪家的普通话服务</li>
+        </ul>
+<pre class="code">TOOLS = [{
+  "type": "function",
+  "function": {
+    "name": "get_weather",
+    "parameters": {
+      "latitude":  {"type": "number"},   <span class="cmt"># 纬度，如杭州 30.25</span>
+      "longitude": {"type": "number"},   <span class="cmt"># 经度，如杭州 120.17</span>
+    }}}]                                 <span class="cmt"># test_003.py 的工具清单</span></pre>
+      </div>
+    </section>
+
+    <!-- L2 -->
+    <section class="stratum">
+      <span class="n">2</span>
+      <h2>API 协议 <span class="en">— 一份合同，不是软件</span></h2>
+      <p class="lead">OpenAI 兼容格式是行业普通话：URL、字段、鉴权、响应结构的约定。这一层“支持 tools”只代表<b>格式合法、照单转发</b>，不代表模型会用。</p>
+      <table class="fields">
+        <tr><th>字段</th><th>作用</th><th>谁校验</th></tr>
+        <tr><td>model</td><td>路由到哪个模型（决定后面每一层长什么样）</td><td>网关 / 引擎</td></tr>
+        <tr><td>messages</td><td>对话历史，含 role=system / user / assistant / tool</td><td>格式：网关；语义：模型</td></tr>
+        <tr><td>tools</td><td>工具清单，供模型选择调用（本图主角）</td><td>格式：网关；<b>用不用：模型说了算</b></td></tr>
+        <tr><td>temperature</td><td>采样随机度（test_002.py 的实验变量）</td><td>引擎</td></tr>
+        <tr><td>stream</td><td>true 时走 SSE 逐块回传</td><td>网关 / 引擎</td></tr>
+      </table>
+<pre class="code quiet">POST {base_url}/v1/chat/completions
+Authorization: Bearer sk-***
+Content-Type: application/json          <span class="cmt"># 换 base_url 即换厂商，普通话的威力</span></pre>
+    </section>
+
+    <!-- L3 -->
+    <section class="stratum">
+      <span class="n">3</span>
+      <h2>聚合网关 <span class="en">— one-api / new-api</span><span class="badge-nogpu">可选层 · 无 GPU · 无模型 · 纯转发</span></h2>
+      <p class="lead">自己不跑任何模型，只做渠道管理、鉴权计费、负载均衡、故障转移。你买的“API 中转”背后多半是别人部署的 new-api。</p>
+      <div class="grid2">
+<pre class="code quiet">one-api
+ ├─ 渠道 1 · OpenAI 官方
+ ├─ 渠道 2 · DeepSeek 官方
+ ├─ 渠道 3 · 自建 vLLM 机器
+ └─ 渠道 4 · 别人布的 new-api     <span class="cmt"># 链路可以套娃</span></pre>
+        <ul class="steps">
+          <li>统一入口：几十个厂商/账号，下游只见一个 OpenAI 格式端点</li>
+          <li>渠道管理：限速、挂了自动切下一个</li>
+          <li>令牌与计费：不同用户不同 key，额度记账</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- L4 -->
+    <section class="stratum">
+      <span class="n">4</span>
+      <h2>推理引擎 <span class="en">— vLLM / SGLang</span></h2>
+      <p class="lead">把模型权重高效跑在 GPU 上的开源引擎。模型不认识 JSON 字段——它读到的一切，都是引擎拼出来的扁平字符串；它吐出的一切，也是引擎解析回结构化字段的。</p>
+      <div class="substeps">
+        <div class="substep">
+          <h3><span class="n4">4a</span>chat template 渲染</h3>
+          <p>Jinja2 模板把 messages + tools 渲染成模型真正读到的 prompt：</p>
+<pre class="code quiet">&lt;|im_start|&gt;system
+You have access to
+the following tools:
+{"name":"get_weather",…}
+&lt;|im_end|&gt;</pre>
+        </div>
+        <div class="substep">
+          <h3><span class="n4">4b</span>调度与显存</h3>
+          <p>continuous batching：请求随到随拼车；PagedAttention（vLLM）分页管 KV 缓存；RadixAttention（SGLang）复用公共前缀。</p>
+        </div>
+        <div class="substep">
+          <h3><span class="n4">4c</span>响应解析</h3>
+          <p>识别模型输出的特殊格式，组装成 tool_calls 字段。少了它，API 照收 tools，响应里 tool_calls 恒为 null：</p>
+<pre class="code quiet">vllm serve Qwen… \
+  --enable-auto-tool-choice \
+  --tool-call-parser hermes</pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- L5 -->
+    <section class="stratum room">
+      <span class="n">5</span>
+      <h2>模型本体 <span class="en">— GPU 上的权重</span></h2>
+      <p class="lead">Transformer 参数矩阵，唯一动作是预测下一个 token。它不会“调用函数”——只是生成约定格式的文本，能力完全来自训练。</p>
+      <div class="grid2">
+        <table class="fields">
+          <tr><th>训练阶段</th><th>学到什么</th></tr>
+          <tr><td>预训练</td><td>海量文本上猜下一个词 → 语言与世界知识</td></tr>
+          <tr><td>SFT</td><td>指令→优质回答示范 → 听懂人话</td></tr>
+          <tr><td>RLHF</td><td>人类偏好排序 → 有用、无害、稳定</td></tr>
+          <tr><td>工具调用微调</td><td>工具定义→结构化调用示范 → <b>function calling</b></td></tr>
+        </table>
+<pre class="code"><span class="cmt"># 模型吐的其实是这段文本，</span>
+<span class="cmt"># 引擎(4c)再把它解析成 tool_calls</span>
+&lt;tool_call&gt;
+{"name": "get_weather",
+ "arguments": {"latitude": 30.25,
+               "longitude": 120.17}}
+&lt;/tool_call&gt;</pre>
+      </div>
+      <p class="note">tools 参数真正生效与否，由这一层说了算——协议接受 ≠ 模型会用。</p>
+    </section>
+
+    <!-- 工具回环 -->
+    <section class="loop">
+      <span class="n copper">6</span>
+      <h2>工具回环 <span class="en">— 回到第 1 层，再下去一趟</span></h2>
+      <div class="loopgrid">
+        <div>
+          <ul class="steps steps-copper">
+            <li><b>⑥ tool_calls 上行</b>：引擎解析好的结构化调用随响应回到 agent：<code class="mono">msg.tool_calls[0].function.name / .arguments</code>（arguments 是 JSON 字符串，需 <code class="mono">json.loads</code>）</li>
+            <li><b>⑦ agent 本地执行</b>：<code class="mono">get_weather(**args)</code>——模型给的参数直接解包成函数实参 → <b>栈外</b>真实 HTTP 请求 open-meteo</li>
+            <li><b>⑧ 第二轮请求</b>：assistant 消息（带 tool_calls 原样 append）+ <code class="mono">role="tool"</code> + <code class="mono">tool_call_id</code> 回传，再次穿过上面五层，模型组织自然语言回答</li>
+          </ul>
+        </div>
+        <div class="ext">
+          <b>⑦ 栈外 · 外部世界</b><br>
+          <span class="mono">GET api.open-meteo.com/v1/forecast<br>?latitude=30.25&amp;longitude=120.17</span><br>
+          真正查到温度 22.4°C 的地方。模型从头到尾没碰过这里——动手的是你的 agent。
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="chain">
+    <div>
+      <h3>支持是一条链，断哪一环都不行</h3>
+      <p class="concl">“这个服务支不支持 tools”不是一个问题是四个。最快的实证：跑一次 test_003.py，看 tool_calls 是否有值。</p>
+    </div>
+    <ul class="risks">
+      <li><span class="dot"></span><span><span class="where">L2</span>　网关不认识字段 → 直接报 400</span></li>
+      <li><span class="dot"></span><span><span class="where">L4a</span>　chat template 没把工具渲染进 prompt → 模型根本不知道有工具</span></li>
+      <li><span class="dot"></span><span><span class="where">L4c</span>　解析器没开（如 vLLM 缺 --tool-call-parser）→ tool_calls 恒为 null</span></li>
+      <li><span class="dot"></span><span><span class="where">L5</span>　模型没训练过工具调用 → 无视 tools 文本作答，或在 content 里吐裸 JSON</span></li>
+    </ul>
+  </footer>
+
+</div>
+</body>
+</html>
